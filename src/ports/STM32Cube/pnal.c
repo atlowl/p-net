@@ -6,7 +6,7 @@
  * |_|    \__|(_)|_| \__,_||_.__/ |___/
  *
  * www.rt-labs.com
- * Copyright 2018 rt-labs AB, Sweden.
+ * Copyright 2021 rt-labs AB, Sweden.
  *
  * This software is dual-licensed under GPLv3 and a commercial
  * license. See the file LICENSE.md distributed with this software for
@@ -19,8 +19,7 @@
 #include "osal.h"
 #include "osal_log.h"
 
-#include <drivers/net.h>
-#include <drivers/eth/phy/phy.h>
+#include <fatfs.h>
 #include <lwip/apps/snmp.h>
 #include <lwip/netif.h>
 #include <lwip/snmp.h>
@@ -46,7 +45,7 @@ int pnal_set_ip_suite (
    ip_addr.addr = htonl (*p_ipaddr);
    ip_mask.addr = htonl (*p_netmask);
    ip_gw.addr = htonl (*p_gw);
-   net_configure (NULL, &ip_addr, &ip_mask, &ip_gw, NULL, hostname);
+   netif_set_addr (netif_default, &ip_addr, &ip_mask, &ip_gw);
 
    return 0;
 }
@@ -119,120 +118,19 @@ int pnal_get_port_statistics (
 
 int pnal_get_interface_index (const char * interface_name)
 {
-   u8_t index;
-   struct netif * netif = netif_find (interface_name);
-
-   if (netif == NULL)
-   {
-      return 0;
-   }
-
-   index = netif_to_num (netif);
-
-   return index;
-}
-
-/**
- * Calculate MAU type
- *
- * @param link_state       In:    Link state.
- * @return The MAU type
- */
-static pnal_eth_mau_t calculate_mau_type (uint8_t link_state)
-{
-   switch (link_state)
-   {
-   case PHY_LINK_OK | PHY_LINK_10MBIT:
-      return PNAL_ETH_MAU_COPPER_10BaseT;
-   case PHY_LINK_OK | PHY_LINK_100MBIT:
-      return PNAL_ETH_MAU_COPPER_100BaseTX_HALF_DUPLEX;
-   case PHY_LINK_OK | PHY_LINK_1000MBIT:
-      return PNAL_ETH_MAU_COPPER_1000BaseT_HALF_DUPLEX;
-   case PHY_LINK_OK | PHY_LINK_10MBIT | PHY_LINK_FULL_DUPLEX:
-      return PNAL_ETH_MAU_COPPER_10BaseT;
-   case PHY_LINK_OK | PHY_LINK_100MBIT | PHY_LINK_FULL_DUPLEX:
-      return PNAL_ETH_MAU_COPPER_100BaseTX_FULL_DUPLEX;
-   case PHY_LINK_OK | PHY_LINK_1000MBIT | PHY_LINK_FULL_DUPLEX:
-      return PNAL_ETH_MAU_COPPER_1000BaseT_FULL_DUPLEX;
-   default:
-      return PNAL_ETH_MAU_RADIO;
-   }
-}
-
-/**
- * Calculate advertised capabilites
- *
- * @param capabilities     In:    rt-kernel advertised capabilities as a
- *                                bitfield.
- * @return Profinet advertised capabilites as a bitfield.
- */
-static uint16_t calculate_capabilities (uint16_t capabilities)
-{
-   uint16_t out = 0;
-
-   if (capabilities & PHY_CAPABILITY_10)
-   {
-      out |= PNAL_ETH_AUTONEG_CAP_10BaseT_HALF_DUPLEX;
-   }
-   if (capabilities & PHY_CAPABILITY_10_FD)
-   {
-      out |= PNAL_ETH_AUTONEG_CAP_10BaseT_FULL_DUPLEX;
-   }
-   if (capabilities & PHY_CAPABILITY_100)
-   {
-      out |= PNAL_ETH_AUTONEG_CAP_100BaseTX_HALF_DUPLEX;
-   }
-   if (capabilities & PHY_CAPABILITY_100_FD)
-   {
-      out |= PNAL_ETH_AUTONEG_CAP_100BaseTX_FULL_DUPLEX;
-   }
-
-   if (out == 0)
-   {
-      out |= PNAL_ETH_AUTONEG_CAP_UNKNOWN;
-   }
-
-   return out;
+   return 0;
 }
 
 int pnal_eth_get_status (const char * interface_name, pnal_eth_status_t * status)
 {
-   struct netif * netif;
-   drv_t * drv;
-   ioctl_eth_status_t link;
-   int error;
+   status->is_autonegotiation_supported = false;
+   status->is_autonegotiation_enabled = false;
+   status->autonegotiation_advertised_capabilities = 0;
 
-   netif = netif_find (interface_name);
-   ASSERT (netif != NULL);
-
-   drv = netif->state;
-   ASSERT (drv != NULL);
-   error = drv->ops->ioctl (drv, netif, IOCTL_ETH_GET_STATUS, &link);
-   if (error)
-   {
-      return -1;
-   }
-
-   status->is_autonegotiation_supported = link.is_autonegotiation_supported;
-   status->is_autonegotiation_enabled = link.is_autonegotiation_enabled;
-   status->autonegotiation_advertised_capabilities =
-      calculate_capabilities (link.capabilities);
-
-   status->operational_mau_type = calculate_mau_type (link.state);
-   status->running = link.is_operational;
+   status->operational_mau_type = 0;
+   status->running = true;
 
    return 0;
-}
-
-int os_snprintf (char * str, size_t size, const char * fmt, ...)
-{
-   int ret;
-   va_list list;
-
-   va_start (list, fmt);
-   ret = snprintf (str, size, fmt, list);
-   va_end (list);
-   return ret;
 }
 
 int pnal_save_file (
@@ -242,12 +140,23 @@ int pnal_save_file (
    const void * object_2,
    size_t size_2)
 {
-   int outputfile;
+   FIL fil;
+   FRESULT fres;
+   UINT count;
    int ret = 0; /* Assume everything goes well */
 
-   /* Open file */
-   outputfile = open (fullpath, O_WRONLY | O_CREAT);
-   if (outputfile < 0)
+   if (!SDFatFSMounted)
+   {
+      LOG_ERROR (
+         PF_PNAL_LOG,
+         "PNAL(%d): SD-Card not mounted (%s)\n",
+         __LINE__,
+         fullpath);
+      return -1;
+   }
+
+   fres = f_open (&fil, fullpath, FA_WRITE | FA_OPEN_ALWAYS | FA_CREATE_ALWAYS);
+   if (fres != FR_OK)
    {
       LOG_ERROR (
          PF_PNAL_LOG,
@@ -260,7 +169,8 @@ int pnal_save_file (
    /* Write file contents */
    if (size_1 > 0)
    {
-      if (write (outputfile, object_1, size_1) != (int)size_1)
+      fres = f_write (&fil, object_1, size_1, &count);
+      if (fres != FR_OK || count != size_1)
       {
          ret = -1;
          LOG_ERROR (
@@ -272,7 +182,8 @@ int pnal_save_file (
    }
    if (size_2 > 0 && ret == 0)
    {
-      if (write (outputfile, object_2, size_2) != (int)size_2)
+      fres = f_write (&fil, object_2, size_2, &count);
+      if (fres != FR_OK || count != size_2)
       {
          ret = -1;
          LOG_ERROR (
@@ -283,15 +194,23 @@ int pnal_save_file (
       }
    }
 
-   /* Close file */
-   close (outputfile);
+   f_close (&fil);
    return ret;
 }
 
 void pnal_clear_file (const char * fullpath)
 {
+   if (!SDFatFSMounted)
+   {
+      LOG_ERROR (
+         PF_PNAL_LOG,
+         "PNAL(%d): SD-Card not mounted (%s)\n",
+         __LINE__,
+         fullpath);
+      return;
+   }
    LOG_DEBUG (PF_PNAL_LOG, "PNAL(%d): Clearing file %s\n", __LINE__, fullpath);
-   (void)remove (fullpath);
+   f_unlink (fullpath);
 }
 
 int pnal_load_file (
@@ -301,14 +220,25 @@ int pnal_load_file (
    void * object_2,
    size_t size_2)
 {
-   int inputfile;
+   FIL fil;
+   FRESULT fres;
+   UINT count;
    int ret = 0; /* Assume everything goes well */
 
-   /* Open file */
-   inputfile = open (fullpath, O_RDONLY);
-   if (inputfile < 0)
+   if (!SDFatFSMounted)
    {
-      LOG_DEBUG (
+      LOG_ERROR (
+         PF_PNAL_LOG,
+         "PNAL(%d): SD-Card not mounted (%s)\n",
+         __LINE__,
+         fullpath);
+      return -1;
+   }
+
+   fres = f_open (&fil, fullpath, FA_READ);
+   if (fres != FR_OK)
+   {
+      LOG_ERROR (
          PF_PNAL_LOG,
          "PNAL(%d): Could not yet open file %s\n",
          __LINE__,
@@ -316,10 +246,11 @@ int pnal_load_file (
       return -1;
    }
 
-   /* Read file contents */
+   /* Write file contents */
    if (size_1 > 0)
    {
-      if (read (inputfile, object_1, size_1) != (int)size_1)
+      fres = f_read (&fil, object_1, size_1, &count);
+      if (fres != FR_OK || count != size_1)
       {
          ret = -1;
          LOG_ERROR (
@@ -331,7 +262,8 @@ int pnal_load_file (
    }
    if (size_2 > 0 && ret == 0)
    {
-      if (read (inputfile, object_2, size_2) != (int)size_2)
+      fres = f_read (&fil, object_2, size_2, &count);
+      if (fres != FR_OK || count != size_2)
       {
          ret = -1;
          LOG_ERROR (
@@ -342,9 +274,7 @@ int pnal_load_file (
       }
    }
 
-   /* Close file */
-   close (inputfile);
-
+   f_close (&fil);
    return ret;
 }
 
@@ -363,7 +293,7 @@ pnal_buf_t * pnal_buf_alloc (uint16_t length)
 
 void pnal_buf_free (pnal_buf_t * p)
 {
-   ASSERT (pbuf_free (p) == 1);
+   CC_ASSERT (pbuf_free (p) == 1);
 }
 
 uint8_t pnal_buf_header (pnal_buf_t * p, int16_t header_size_increment)

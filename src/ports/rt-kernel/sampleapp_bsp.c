@@ -13,16 +13,13 @@
  * full license information.
  ********************************************************************/
 
-#include <gtest/gtest.h>
-#include "osal.h"
+#include "sampleapp_common.h"
 
-OS_MAIN (int argc, char * argv[])
+void app_set_led (uint16_t id, bool led_state)
 {
-   if (argc > 0)
-      ::testing::InitGoogleTest (&argc, argv);
-   else
-      ::testing::InitGoogleTest();
+}
 
-   int result = RUN_ALL_TESTS();
-   return result;
+bool app_get_button (uint16_t id)
+{
+   return false;
 }

@@ -6,7 +6,7 @@
 # |_|    \__|(_)|_| \__,_||_.__/ |___/
 #
 # www.rt-labs.com
-# Copyright 2018 rt-labs AB, Sweden.
+# Copyright 2021 rt-labs AB, Sweden.
 #
 # This software is dual-licensed under GPLv3 and a commercial
 # license. See the file LICENSE.md distributed with this software for
@@ -15,20 +15,14 @@
 
 target_include_directories(profinet
   PRIVATE
-  src/ports/rt-kernel
+  src/ports/STM32Cube
   )
 
 target_sources(profinet
   PRIVATE
-  src/ports/rt-kernel/pnal.c
-  src/ports/rt-kernel/pnal_eth.c
-  src/ports/rt-kernel/pnal_udp.c
-  src/ports/rt-kernel/pnal_snmp.c
-  src/ports/rt-kernel/mib/mib2_system.c
-  src/ports/rt-kernel/mib/lldp-mib.c
-  src/ports/rt-kernel/mib/lldp-ext-pno-mib.c
-  src/ports/rt-kernel/mib/lldp-ext-dot3-mib.c
-  src/ports/rt-kernel/mib/rowindex.c
+  src/ports/STM32Cube/pnal.c
+  src/ports/STM32Cube/pnal_eth.c
+  src/ports/STM32Cube/pnal_udp.c
   )
 
 target_compile_options(profinet
@@ -42,13 +36,13 @@ target_compile_options(profinet
 target_include_directories(pn_dev
   PRIVATE
   sample_app
-  src/ports/rt-kernel
+  src/ports/STM32Cube
   )
 
-if (EXISTS ${PROFINET_SOURCE_DIR}/src/ports/rt-kernel/sampleapp_${BSP}.c)
-  set(BSP_SOURCE sampleapp_${BSP}.c)
+if (EXISTS ${PROFINET_SOURCE_DIR}/src/ports/STM32Cube/sampleapp_${BOARD}.c)
+  set(BOARD_SOURCE sampleapp_${BOARD}.c)
 else()
-  set(BSP_SOURCE sampleapp_bsp.c)
+  set(BOARD_SOURCE sampleapp_board.c)
 endif()
 
 target_sources(pn_dev
@@ -58,8 +52,8 @@ target_sources(pn_dev
   sample_app/app_log.c
   sample_app/app_gsdml.c
   sample_app/app_data.c
-  src/ports/rt-kernel/sampleapp_main.c
-  src/ports/rt-kernel/${BSP_SOURCE}
+  src/ports/STM32Cube/sampleapp_main.c
+  src/ports/STM32Cube/${BOARD_SOURCE}
   )
 
 target_compile_options(pn_dev
@@ -70,14 +64,20 @@ target_compile_options(pn_dev
   -Wno-unused-parameter
   )
 
+target_link_libraries(pn_dev PRIVATE cube-bsp)
+
 install (FILES
-  src/ports/rt-kernel/pnal_config.h
+  src/ports/STM32Cube/pnal_config.h
   DESTINATION include
   )
 
 if (BUILD_TESTING)
   target_include_directories(pf_test
     PRIVATE
-    src/ports/rt-kernel
+    src/ports/STM32Cube
     )
+  target_link_libraries(pf_test PRIVATE cube-bsp)
 endif()
+
+generate_bin(pn_dev)
+generate_bin(pf_test)
